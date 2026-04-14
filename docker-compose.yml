@@ -1,0 +1,449 @@
+version: "3.8"
+
+networks:
+  cds-network:
+    driver: bridge
+
+volumes:
+  postgres-identity-data:
+  postgres-app-data:
+  redis-data:
+  minio-data:
+  kafka1-data:
+  kafka2-data:
+  kafka3-data:
+  grafana-data:
+  prometheus-data:
+
+services:
+
+  # ─── INFRASTRUCTURE ────────────────────────────────────────
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: cds-zookeeper
+    networks: [cds-network]
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka1:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka1
+    container_name: cds-kafka1
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    networks: [cds-network]
+    ports:
+      - "29092:29092"
+    volumes:
+      - kafka1-data:/var/lib/kafka/data
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  kafka2:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka2
+    container_name: cds-kafka2
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    networks: [cds-network]
+    ports:
+      - "39092:39092"
+    volumes:
+      - kafka2-data:/var/lib/kafka/data
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:9092,PLAINTEXT_HOST://localhost:39092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  kafka3:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka3
+    container_name: cds-kafka3
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    networks: [cds-network]
+    ports:
+      - "49092:49092"
+    volumes:
+      - kafka3-data:/var/lib/kafka/data
+    environment:
+      KAFKA_BROKER_ID: 3
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka3:9092,PLAINTEXT_HOST://localhost:49092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    hostname: schema-registry
+    container_name: cds-schema-registry
+    depends_on:
+      kafka1:
+        condition: service_healthy
+      kafka2:
+        condition: service_healthy
+      kafka3:
+        condition: service_healthy
+    networks: [cds-network]
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka1:9092,kafka2:9092,kafka3:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: cds-kafka-ui
+    depends_on:
+      kafka1:
+        condition: service_healthy
+    networks: [cds-network]
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: cds-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka1:9092,kafka2:9092,kafka3:9092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+
+  postgres-identity:
+    image: postgres:15-alpine
+    container_name: cds-postgres-identity
+    networks: [cds-network]
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-identity-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cds}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cds_secret}
+      POSTGRES_DB: cds_identity
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cds} -d cds_identity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-app:
+    image: postgres:15-alpine
+    container_name: cds-postgres-app
+    networks: [cds-network]
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-app-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cds}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cds_secret}
+      POSTGRES_DB: cds_app
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cds} -d cds_app"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cds-redis
+    networks: [cds-network]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis_secret} --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secret}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: cds-minio
+    networks: [cds-network]
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin_secret}
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.50
+    container_name: cds-jaeger
+    networks: [cds-network]
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+      - "6831:6831/udp"
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: cds-prometheus
+    networks: [cds-network]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: cds-grafana
+    networks: [cds-network]
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin_secret}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+  # ─── CDS SERVICES ──────────────────────────────────────────
+
+  identity-service:
+    build:
+      context: ./services/identity-service
+      dockerfile: Dockerfile
+    container_name: cds-identity-service
+    networks: [cds-network]
+    ports:
+      - "8001:8000"
+    env_file: .env
+    environment:
+      SERVICE_NAME: identity-service
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cds}:${POSTGRES_PASSWORD:-cds_secret}@postgres-identity:5432/cds_identity
+    depends_on:
+      postgres-identity:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  ingestion-service:
+    build:
+      context: ./services/ingestion-service
+      dockerfile: Dockerfile
+    container_name: cds-ingestion-service
+    networks: [cds-network]
+    ports:
+      - "8002:8000"
+    env_file: .env
+    environment:
+      SERVICE_NAME: ingestion-service
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cds}:${POSTGRES_PASSWORD:-cds_secret}@postgres-app:5432/cds_app
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+      kafka1:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  processing-service:
+    build:
+      context: ./services/processing-service
+      dockerfile: Dockerfile
+    container_name: cds-processing-service
+    networks: [cds-network]
+    ports:
+      - "8003:8000"
+    env_file: .env
+    environment:
+      SERVICE_NAME: processing-service
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cds}:${POSTGRES_PASSWORD:-cds_secret}@postgres-app:5432/cds_app
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+      kafka1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  governance-service:
+    build:
+      context: ./services/governance-service
+      dockerfile: Dockerfile
+    container_name: cds-governance-service
+    networks: [cds-network]
+    ports:
+      - "8004:8000"
+    env_file: .env
+    environment:
+      SERVICE_NAME: governance-service
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cds}:${POSTGRES_PASSWORD:-cds_secret}@postgres-app:5432/cds_app
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+      kafka1:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  kpi-service:
+    build:
+      context: ./services/kpi-service
+      dockerfile: Dockerfile
+    container_name: cds-kpi-service
+    networks: [cds-network]
+    ports:
+      - "8005:8000"
+    env_file: .env
+    environment:
+      SERVICE_NAME: kpi-service
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cds}:${POSTGRES_PASSWORD:-cds_secret}@postgres-app:5432/cds_app
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+      kafka1:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  monitoring-service:
+    build:
+      context: ./services/monitoring-service
+      dockerfile: Dockerfile
+    container_name: cds-monitoring-service
+    networks: [cds-network]
+    ports:
+      - "8006:8000"
+    env_file: .env
+    environment:
+      SERVICE_NAME: monitoring-service
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cds}:${POSTGRES_PASSWORD:-cds_secret}@postgres-app:5432/cds_app
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+      kafka1:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: cds-notification-service
+    networks: [cds-network]
+    ports:
+      - "8007:8000"
+    env_file: .env
+    environment:
+      SERVICE_NAME: notification-service
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cds}:${POSTGRES_PASSWORD:-cds_secret}@postgres-app:5432/cds_app
+    depends_on:
+      postgres-app:
+        condition: service_healthy
+      kafka1:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped

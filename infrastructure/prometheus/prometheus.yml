@@ -1,0 +1,39 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: cds-identity-service
+    static_configs:
+      - targets: ["identity-service:8000"]
+    metrics_path: /metrics
+
+  - job_name: cds-ingestion-service
+    static_configs:
+      - targets: ["ingestion-service:8000"]
+    metrics_path: /metrics
+
+  - job_name: cds-processing-service
+    static_configs:
+      - targets: ["processing-service:8000"]
+    metrics_path: /metrics
+
+  - job_name: cds-governance-service
+    static_configs:
+      - targets: ["governance-service:8000"]
+    metrics_path: /metrics
+
+  - job_name: cds-kpi-service
+    static_configs:
+      - targets: ["kpi-service:8000"]
+    metrics_path: /metrics
+
+  - job_name: cds-monitoring-service
+    static_configs:
+      - targets: ["monitoring-service:8000"]
+    metrics_path: /metrics
+
+  - job_name: cds-notification-service
+    static_configs:
+      - targets: ["notification-service:8000"]
+    metrics_path: /metrics
